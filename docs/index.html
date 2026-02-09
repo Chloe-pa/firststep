@@ -4,9 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Inspyfold</title>
+    <link rel="stylesheet" href="/src/styles.css" />
     <link rel="icon" id="appFavicon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2285%22 fill=%22%23d4a5a5%22>✴︎</text></svg>">
-    <script type="module" crossorigin src="./assets/index-Dq732_2r.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-DAM4Zisj.css">
   </head>
   <body>
 <div class="app-shell">
@@ -131,7 +130,7 @@
     </div>
   </div>
 
-  <script>
+  <script type="module">
     const DEFAULT_PRIMARY = '#d4a5a5';
 
     const now = new Date();
@@ -1041,7 +1040,7 @@
 
       document.body.classList.toggle('dark-mode', nextDark);
       document.getElementById('themeBtn').innerText = nextDark ? '☀️' : '🌙';
-      document.getElementById('mainLogo').src = nextDark ? 'logo_d.png' : 'logo_l.png';
+      document.getElementById('mainLogo').src = base + (nextDark ? 'logo_d.png' : 'logo_l.png');
 
       if(fromUser) localStorage.setItem('inspy_theme', nextDark ? 'dark' : 'light');
       toast(nextDark ? '다크 모드' : '라이트 모드');
@@ -1053,5 +1052,6 @@
     render();
     clearAttachedImage(true);
   </script>
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
