@@ -1,0 +1,957 @@
+// Generated from original single-file HTML.
+// This project uses Vite + TypeScript but keeps your original DOM-based logic intact.
+// Inline event handlers in index.html need functions on `window`, so we export them.
+
+const DEFAULT_PRIMARY = '#d4a5a5';
+
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}. ${now.getMonth() + 1}. ${now.getDate()}.`;
+
+    let memos = JSON.parse(localStorage.getItem('inspy_memos')) || [];
+    let folders = JSON.parse(localStorage.getItem('inspy_folders')) || ['아이디어', '일상'];
+    let lockPw = localStorage.getItem('inspy_pw') || null;
+
+    let unblurredIds = [];
+    let curFolder = '전체';
+    let isFavFilter = false;
+
+    let attachedImage = "";
+    let attachedImageMeta = { w: 0, h: 0, kb: 0 };
+
+    let currentViewDate = new Date();
+
+    // 범위
+    let selectedRange = { start: todayStr, end: todayStr };
+    let rangeMode = 'idle';
+    let rangeAnchor = null;
+    let dragActive = false;
+
+    /* ✅ 시스템 기본 설정 기반 초기 테마 */
+    function applyInitialTheme(){
+      const stored = localStorage.getItem('inspy_theme'); // 'dark'|'light'|null
+      const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const shouldDark = stored ? (stored === 'dark') : prefersDark;
+
+      document.body.classList.toggle('dark-mode', shouldDark);
+      document.getElementById('themeBtn').innerText = shouldDark ? '☀️' : '🌙';
+      document.getElementById('mainLogo').src = shouldDark ? 'logo_d.png' : 'logo_l.png';
+    }
+
+    function parseDateStr(s){
+      const m=(s||'').match(/^(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.$/);
+      if(!m) return null;
+      return new Date(Number(m[1]), Number(m[2])-1, Number(m[3]), 12,0,0,0);
+    }
+    function normalizeRange(a,b){
+      const da=parseDateStr(a), db=parseDateStr(b);
+      if(!da||!db) return null;
+      if(da.getTime()<=db.getTime()) return {start:a,end:b};
+      return {start:b,end:a};
+    }
+    function isInRange(dateStr, range){
+      if(!range) return true;
+      const d=parseDateStr(dateStr), s=parseDateStr(range.start), e=parseDateStr(range.end);
+      if(!d||!s||!e) return false;
+      const t=d.getTime();
+      return t>=s.getTime() && t<=e.getTime();
+    }
+    function fmtCompact(dateStr){
+      const d=parseDateStr(dateStr);
+      if(!d) return '';
+      const y=d.getFullYear();
+      const m=String(d.getMonth()+1).padStart(2,'0');
+      const dd=String(d.getDate()).padStart(2,'0');
+      return `${y}.${m}.${dd}`;
+    }
+
+    function hexToRgb(hex){
+      const h=hex.replace('#','').trim();
+      if(h.length!==6) return null;
+      return {
+        r: parseInt(h.slice(0,2),16),
+        g: parseInt(h.slice(2,4),16),
+        b: parseInt(h.slice(4,6),16)
+      };
+    }
+
+    /* ✅ 테마색 파생값을 전부 변수로만 계산해서 "어디든" 자동 반영 */
+    function setPrimary(hex){
+      const rgb = hexToRgb(hex);
+      if(!rgb) return;
+
+      const root = document.documentElement.style;
+      root.setProperty('--primary', hex);
+      root.setProperty('--p-r', rgb.r);
+      root.setProperty('--p-g', rgb.g);
+      root.setProperty('--p-b', rgb.b);
+
+      localStorage.setItem('inspy_primary', hex);
+      updateFavicon(hex);
+      render();
+    }
+    function loadPrimary(){
+      const saved = localStorage.getItem('inspy_primary');
+      if(saved && /^#[0-9A-Fa-f]{6}$/.test(saved)) setPrimary(saved);
+      else setPrimary(DEFAULT_PRIMARY);
+    }
+    function resetPrimary(){
+      localStorage.removeItem('inspy_primary');
+      setPrimary(DEFAULT_PRIMARY);
+      toast('기본 색상으로 변경');
+    }
+    function updateFavicon(hex){
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="85" fill="${hex}">✴︎</text></svg>`;
+      const url = 'data:image/svg+xml,' + encodeURIComponent(svg);
+      const el = document.getElementById('appFavicon');
+      if(el) el.setAttribute('href', url);
+    }
+
+    /* 시계 */
+    function updateClock(){
+      const n = new Date();
+      const timeStr = n.toLocaleTimeString('ko-KR', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'});
+      document.getElementById('liveClock').innerText = timeStr;
+    }
+    setInterval(updateClock,1000); updateClock();
+
+    /* 토스트 */
+    let toastTimer=null;
+    function toast(msg, sub="", duration=1600){
+      const wrap=document.getElementById('toastWrap');
+      if(!wrap) return;
+
+      if(toastTimer) clearTimeout(toastTimer);
+      [...wrap.children].forEach(node=>{ node.classList.add('fadeout'); setTimeout(()=>node.remove(),230); });
+
+      const t=document.createElement('div');
+      t.className='toast';
+      t.innerHTML = `<div>${msg}</div>${sub?`<div class="subline">${sub}</div>`:''}`;
+      wrap.appendChild(t);
+
+      toastTimer=setTimeout(()=>{
+        t.classList.add('fadeout');
+        setTimeout(()=>t.remove(),230);
+      }, duration);
+    }
+
+    /* ✴︎ 파티클 */
+    function sparkleBurst(x,y,count=10,spread=120){
+      const color=getComputedStyle(document.documentElement).getPropertyValue('--primary').trim() || DEFAULT_PRIMARY;
+      for(let i=0;i<count;i++){
+        const s=document.createElement('div');
+        s.className='spark'; s.textContent='✴︎';
+        s.style.left=`${x}px`; s.style.top=`${y}px`;
+        const dx=(Math.random()*spread - spread/2).toFixed(0)+'px';
+        const dy=(Math.random()*-spread - 30).toFixed(0)+'px';
+        s.style.setProperty('--dx', dx);
+        s.style.setProperty('--dy', dy);
+        s.style.fontSize=(12 + Math.random()*9).toFixed(0)+'px';
+        s.style.color=color;
+        document.body.appendChild(s);
+        setTimeout(()=>s.remove(),700);
+      }
+    }
+    function sparkleAt(el,count=10){
+      if(!el) return;
+      const r=el.getBoundingClientRect();
+      sparkleBurst(r.left + r.width*0.7, r.top + r.height*0.2, count, 120);
+    }
+
+    /* 이미지 뷰어 */
+    function openImageViewer(src){
+      const v=document.getElementById('imgViewer');
+      const img=document.getElementById('viewerImg');
+      if(!v||!img) return;
+      img.src=src;
+      v.classList.add('open');
+    }
+    function closeImageViewer(){
+      const v=document.getElementById('imgViewer');
+      const img=document.getElementById('viewerImg');
+      if(img) img.src='';
+      if(v) v.classList.remove('open');
+    }
+
+    /* 백업 */
+    function exportData(){
+      const data = {
+        memos, folders, lockPw,
+        primary: localStorage.getItem('inspy_primary') || null,
+        theme: localStorage.getItem('inspy_theme') || null
+      };
+      const blob = new Blob([JSON.stringify(data)], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url; a.download=`inspyfold_backup_${new Date().toLocaleDateString()}.json`;
+      a.click();
+      toast('내보내기 준비 완료','백업 파일이 다운로드돼요');
+    }
+    function importData(e){
+      const file=e.target.files[0]; if(!file) return;
+      const reader=new FileReader();
+      reader.onload=(ev)=>{
+        try{
+          const data=JSON.parse(ev.target.result);
+          memos=data.memos || [];
+          folders=data.folders || ['아이디어','일상'];
+          lockPw=data.lockPw || null;
+
+          if(data.primary && /^#[0-9A-Fa-f]{6}$/.test(data.primary)) localStorage.setItem('inspy_primary', data.primary);
+          if(data.theme==='dark' || data.theme==='light') localStorage.setItem('inspy_theme', data.theme);
+
+          if(lockPw) localStorage.setItem('inspy_pw', lockPw);
+          else localStorage.removeItem('inspy_pw');
+
+          save(false);
+          toast('가져오기 완료','새 데이터로 갱신됐어요');
+          location.reload();
+        }catch(err){
+          toast('가져오기 실패','파일 형식을 확인해요');
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    /* 모달 */
+    const modal={open:false, onSubmit:null};
+    function modalOnBackdrop(e){ closeModal(); }
+
+    function openModal(config){
+      modal.open=true;
+      modal.onSubmit = config.onSubmit || null;
+
+      const backdrop=document.getElementById('modalBackdrop');
+      const titleEl=document.getElementById('modalTitle');
+      const descEl=document.getElementById('modalDesc');
+      const hintEl=document.getElementById('modalHint');
+      const inputEl=document.getElementById('modalInput');
+      const actionsEl=document.getElementById('modalActions');
+      const extraEl=document.getElementById('modalExtra');
+
+      titleEl.innerText=config.title||'';
+      descEl.innerText=config.desc||'';
+      hintEl.innerText=config.hint||'';
+      extraEl.innerHTML=config.extraHTML||'';
+
+      if(config.showInput){
+        inputEl.style.display='block';
+        inputEl.type=config.inputType || 'text';
+        inputEl.value=config.inputValue || '';
+        inputEl.placeholder=config.inputPlaceholder || '';
+        inputEl.maxLength=config.inputMax || 64;
+        setTimeout(()=>inputEl.focus(),0);
+      }else{
+        inputEl.style.display='none';
+        inputEl.value='';
+      }
+
+      actionsEl.innerHTML='';
+
+      (config.actions||[]).forEach(a=>{
+        const btn=document.createElement('button');
+        btn.className=`btn-modal ${a.variant||''}`.trim();
+        btn.innerText=a.label;
+        btn.onclick=a.onClick;
+        actionsEl.appendChild(btn);
+      });
+
+      inputEl.onkeydown=(ev)=>{
+        if(ev.key==='Enter' && modal.onSubmit){
+          ev.preventDefault();
+          modal.onSubmit();
+        }
+      };
+
+      backdrop.classList.remove('hidden');
+    }
+    function closeModal(){
+      modal.open=false; modal.onSubmit=null;
+      document.getElementById('modalBackdrop').classList.add('hidden');
+      document.getElementById('modalExtra').innerHTML='';
+    }
+    function getModalInput(){ return document.getElementById('modalInput').value || ''; }
+    function setModalHint(text){ document.getElementById('modalHint').innerText = text || ''; }
+
+    /* 팔레트 */
+    function openPalette(){
+      const presets=[
+        '#d4a5a5','#f3a6b8','#ffb86b','#facc15','#34d399','#22c55e',
+        '#2dd4bf','#38bdf8','#3b82f6','#8b5cf6','#a78bfa','#f472b6'
+      ];
+      const current = localStorage.getItem('inspy_primary') || DEFAULT_PRIMARY;
+      const dots = presets.map(hex=>{
+        const active=(hex.toLowerCase()===current.toLowerCase())?'active':'';
+        return `<div class="color-dot ${active}" style="background:${hex}" onclick="setPrimary('${hex}')"></div>`;
+      }).join('');
+
+      openModal({
+        title:'테마 색상',
+        desc:'앱의 포인트 컬러를 바꿔요.',
+        hint:'원하는 색을 선택한 뒤 닫아도 자동 저장돼요.',
+        showInput:false,
+        extraHTML:`<div class="palette-grid">${dots}</div>`,
+        actions:[
+          {label:'기본값', onClick:()=>resetPrimary()},
+          {label:'완료', variant:'primary', onClick:()=>{ toast('테마 적용 완료'); closeModal(); } }
+        ]
+      });
+    }
+
+    /* 잠금 */
+    const PW_REGEX=/^[A-Za-z0-9]+$/;
+
+    function handleLockToggle(){
+      if(!lockPw){
+        openModal({
+          title:'잠금 설정',
+          desc:'이 앱을 잠글 비밀번호를 설정해요.',
+          hint:'비밀번호는 영문/숫자만 사용할 수 있어요.',
+          showInput:true,
+          inputType:'password',
+          inputPlaceholder:'영문/숫자 비밀번호',
+          inputMax:32,
+          actions:[
+            {label:'취소', onClick:()=>closeModal()},
+            {label:'잠그기', variant:'primary', onClick:()=>{
+              const pw=getModalInput().trim();
+              if(!pw){ setModalHint('비밀번호를 입력해요.'); return; }
+              if(!PW_REGEX.test(pw)){ setModalHint('영문/숫자만 입력할 수 있어요.'); return; }
+              lockPw=pw;
+              localStorage.setItem('inspy_pw', pw);
+              unblurredIds=[];
+              closeModal();
+              setTimeout(()=>toast('잠금이 설정됐어요','메모는 탭하여 일시해제 가능해요'),60);
+              render();
+            }}
+          ]
+        });
+        return;
+      }
+
+      /* ✅ 요청: 잠금 끄기 모달 버튼 3개를 "붙여서 오른쪽 정렬" */
+      openModal({
+        title:'잠금 끄기',
+        desc:'잠금을 끄려면 비밀번호를 입력해요.',
+        hint:'비밀번호를 잃어버렸다면 초기화가 필요해요.',
+        showInput:true,
+        inputType:'password',
+        inputPlaceholder:'비밀번호 입력',
+        inputMax:32,
+        actions:[
+          {label:'취소', onClick:()=>closeModal()},
+          {label:'초기화', variant:'danger', onClick:()=>openResetModalStep1()},
+          {label:'잠금 끄기', variant:'primary', onClick:()=>{
+            const pw=getModalInput();
+            if(pw!==lockPw){ setModalHint('비밀번호가 맞지 않아요.'); toast('비밀번호가 맞지 않아요'); return; }
+            lockPw=null;
+            localStorage.removeItem('inspy_pw');
+            unblurredIds=[];
+            closeModal();
+            setTimeout(()=>toast('잠금을 껐어요'),60);
+            render();
+          }}
+        ]
+      });
+    }
+
+    function openResetModalStep1(){
+      openModal({
+        title:'초기화 안내',
+        desc:'비밀번호를 잃어버렸다면 초기화만 가능해요.\n초기화하면 잠금이 풀리면서, 모든 기록이 삭제돼요.',
+        hint:'다음 단계에서 한 번 더 확인해요.',
+        showInput:false,
+        actions:[
+          {label:'취소', onClick:()=>closeModal()},
+          {label:'다음', variant:'danger', onClick:()=>openResetModalStep2()}
+        ]
+      });
+    }
+    function openResetModalStep2(){
+      openModal({
+        title:'정말 초기화할까요?',
+        desc:'초기화를 진행하면 지금까지의 모든 기록이 삭제돼요.\n되돌릴 수 없어요.',
+        hint:'삭제를 원하면 아래 버튼을 눌러요.',
+        showInput:false,
+        actions:[
+          {label:'취소', onClick:()=>closeModal()},
+          {label:'모든 기록 삭제', variant:'danger', onClick:()=>{
+            localStorage.removeItem('inspy_memos');
+            localStorage.removeItem('inspy_folders');
+            localStorage.removeItem('inspy_pw');
+
+            memos=[];
+            folders=['아이디어','일상'];
+            lockPw=null;
+            unblurredIds=[];
+
+            closeModal();
+            setTimeout(()=>toast('초기화 완료','모든 기록이 삭제됐어요'),60);
+            location.reload();
+          }}
+        ]
+      });
+    }
+
+    function unlockTemporarily(id){
+      openModal({
+        title:'일시 해제',
+        desc:'이 메모를 일시적으로 볼 수 있어요.',
+        hint:'잠금을 완전히 끄려면 헤더의 자물쇠 아이콘을 눌러요.',
+        showInput:true,
+        inputType:'password',
+        inputPlaceholder:'비밀번호 입력',
+        inputMax:32,
+        actions:[
+          {label:'취소', onClick:()=>closeModal()},
+          {label:'일시 해제', variant:'primary', onClick:()=>{
+            const pw=getModalInput();
+            if(pw!==lockPw){ setModalHint('비밀번호가 맞지 않아요.'); toast('비밀번호가 맞지 않아요'); return; }
+            if(!unblurredIds.includes(id)) unblurredIds.push(id);
+            closeModal();
+            setTimeout(()=>toast('일시해제 완료','완전 해제는 헤더 자물쇠에서 가능해요'),60);
+            render();
+          }}
+        ]
+      });
+    }
+
+    /* 검색 */
+    function toggleSearch(){
+      const sw=document.getElementById('searchWrap');
+      sw.classList.toggle('open');
+      if(sw.classList.contains('open')) document.getElementById('searchInput').focus();
+      updateSearchClearBtn();
+    }
+    function handleSearchInput(){
+      updateSearchClearBtn();
+      render();
+    }
+    function updateSearchClearBtn(){
+      const v=(document.getElementById('searchInput').value||'').trim();
+      document.getElementById('searchClearBtn').classList.toggle('show', v.length>0);
+    }
+    function clearSearch(){
+      const input=document.getElementById('searchInput');
+      input.value='';
+      updateSearchClearBtn();
+      toast('검색어 삭제됨');
+      render();
+      input.focus();
+    }
+
+    /* 저장 */
+    function save(doRender=true){
+      localStorage.setItem('inspy_memos', JSON.stringify(memos));
+      localStorage.setItem('inspy_folders', JSON.stringify(folders));
+      if(doRender) render();
+    }
+
+    /* 폴더 */
+    function addFolder(){
+      openModal({
+        title:'새 폴더 만들기',
+        desc:'폴더 이름을 입력해요.',
+        hint:'중복 이름은 만들 수 없어요.',
+        showInput:true,
+        inputType:'text',
+        inputPlaceholder:'예: 아이디어',
+        inputMax:18,
+        actions:[
+          {label:'취소', onClick:()=>closeModal()},
+          {label:'생성', variant:'primary', onClick:()=>{
+            const n=getModalInput().trim();
+            if(!n){ setModalHint('폴더 이름을 입력해요.'); return; }
+            if(folders.includes(n)){ setModalHint('이미 존재하는 폴더예요.'); return; }
+            folders.push(n);
+            closeModal();
+            setTimeout(()=>toast('폴더 생성됨', n),60);
+            save();
+          }}
+        ]
+      });
+    }
+    function deleteFolder(name, e){
+      e.stopPropagation();
+      if(folders.length<=1){ toast('폴더는 최소 1개가 필요해요'); return; }
+      openModal({
+        title:'폴더 삭제',
+        desc:`'${name}' 폴더를 삭제할까요?`,
+        hint:'해당 폴더의 메모는 다른 폴더로 이동돼요.',
+        showInput:false,
+        actions:[
+          {label:'취소', onClick:()=>closeModal()},
+          {label:'삭제', variant:'danger', onClick:()=>{
+            folders = folders.filter(f=>f!==name);
+            memos = memos.map(m => m.tags[0]===name ? {...m, tags:[folders[0]]} : m);
+            if(curFolder===name) curFolder='전체';
+            closeModal();
+            setTimeout(()=>toast('폴더 삭제됨', `'${name}'`),60);
+            save();
+          }}
+        ]
+      });
+    }
+    function changeFolder(n){ curFolder=n; render(); }
+
+    /* 메모 삭제 */
+    function confirmDeleteMemo(id){
+      openModal({
+        title:'메모 삭제',
+        desc:'이 메모를 삭제할까요?',
+        hint:'되돌릴 수 없어요.',
+        showInput:false,
+        actions:[
+          {label:'취소', onClick:()=>closeModal()},
+          {label:'삭제', variant:'danger', onClick:()=>{
+            closeModal();
+            deleteMemoById(id);
+          }}
+        ]
+      });
+    }
+    function deleteMemoById(id){
+      const item=document.querySelector(`.memo-item[data-id="${id}"]`);
+      if(item) item.classList.add('removing');
+      setTimeout(()=>{
+        memos = memos.filter(v=>v.id!==id);
+        unblurredIds = unblurredIds.filter(x=>x!==id);
+        toast('삭제 완료');
+        save();
+      }, 360);
+    }
+
+    /* ✅ 즐겨찾기 동작 보장 + 테마색(색은 CSS var로 이미 따라감) */
+    function toggleFav(id, el){
+      memos = memos.map(v => v.id === id ? ({...v, fav: !v.fav}) : v);
+
+      if(el){
+        el.classList.remove('popped');
+        void el.offsetWidth;
+        el.classList.add('popped');
+      }
+
+      localStorage.setItem('inspy_memos', JSON.stringify(memos));
+      setTimeout(()=>render(), 120);
+    }
+
+    function updateMemoTag(id, newTag){
+      memos = memos.map(m => m.id===id ? ({...m, tags:[newTag]}) : m);
+      save();
+    }
+
+    /* 첨부 초기화 */
+    function clearAttachedImage(silent=true){
+      attachedImage="";
+      attachedImageMeta={w:0,h:0,kb:0};
+      const input=document.getElementById('imgInput'); if(input) input.value="";
+      const wrap=document.getElementById('imgPreviewWrap');
+      const img=document.getElementById('imgPreview');
+      if(wrap) wrap.style.display='none';
+      if(img) img.src='';
+      if(!silent) toast('첨부 해제됨');
+    }
+
+    /* 이미지 압축 */
+    async function compressImageFile(file, opts={}){
+      const maxW=opts.maxW ?? 1440;
+      const maxH=opts.maxH ?? 1440;
+      const quality=opts.quality ?? 0.82;
+
+      const img=new Image();
+      const url=URL.createObjectURL(file);
+
+      await new Promise((res,rej)=>{
+        img.onload=()=>res();
+        img.onerror=()=>rej(new Error('이미지 로드 실패'));
+        img.src=url;
+      });
+
+      const srcW=img.naturalWidth || img.width;
+      const srcH=img.naturalHeight || img.height;
+
+      const scale=Math.min(maxW/srcW, maxH/srcH, 1);
+      const dstW=Math.max(1, Math.round(srcW*scale));
+      const dstH=Math.max(1, Math.round(srcH*scale));
+
+      const canvas=document.createElement('canvas');
+      canvas.width=dstW; canvas.height=dstH;
+      const ctx=canvas.getContext('2d', {alpha:false});
+      ctx.fillStyle='#ffffff';
+      ctx.fillRect(0,0,dstW,dstH);
+      ctx.imageSmoothingEnabled=true;
+      ctx.imageSmoothingQuality='high';
+      ctx.drawImage(img,0,0,dstW,dstH);
+
+      const dataUrl=canvas.toDataURL('image/jpeg', quality);
+      URL.revokeObjectURL(url);
+
+      const kb=Math.round((dataUrl.length*3)/4/1024);
+      return {dataUrl, w:dstW, h:dstH, kb};
+    }
+
+    let previewPressTimer=null;
+    function bindPreviewInteractions(){
+      const img=document.getElementById('imgPreview');
+      if(!img) return;
+      img.onclick=()=>{ if(attachedImage) openImageViewer(attachedImage); };
+      img.onpointerdown=()=>{
+        if(!attachedImage) return;
+        clearTimeout(previewPressTimer);
+        previewPressTimer=setTimeout(()=>openImageViewer(attachedImage), 320);
+      };
+      img.onpointerup=()=>clearTimeout(previewPressTimer);
+      img.onpointercancel=()=>clearTimeout(previewPressTimer);
+      img.onpointerleave=()=>clearTimeout(previewPressTimer);
+    }
+
+    async function previewImage(e){
+      const file=e.target.files && e.target.files[0];
+      if(!file) return;
+      if(!file.type.startsWith('image/')){ toast('이미지 파일만 첨부할 수 있어요'); return; }
+
+      toast('처리 중...','리사이즈/압축하고 있어요', 900);
+
+      try{
+        const {dataUrl,w,h,kb} = await compressImageFile(file, {maxW:1440, maxH:1440, quality:0.82});
+        attachedImage=dataUrl;
+        attachedImageMeta={w,h,kb};
+
+        const wrap=document.getElementById('imgPreviewWrap');
+        const img=document.getElementById('imgPreview');
+        if(img) img.src=attachedImage;
+        if(wrap) wrap.style.display='block';
+        bindPreviewInteractions();
+
+        toast('이미지 첨부됨', `${w}×${h}px · 약 ${kb}KB`);
+      }catch(err){
+        toast('이미지 처리 실패','다시 시도해요');
+        clearAttachedImage(true);
+      }
+    }
+
+    /* 메모 추가 */
+    function addMemo(){
+      const t=document.getElementById('memoInput').value.trim();
+      if(!t && !attachedImage) return;
+
+      const n=new Date();
+      const dStr=`${n.getFullYear()}. ${n.getMonth()+1}. ${n.getDate()}.`;
+      const tStr=n.toLocaleTimeString('ko-KR',{hour:'2-digit', minute:'2-digit'});
+
+      memos.push({
+        id:Date.now(),
+        text:t,
+        img:attachedImage,
+        tags:[document.getElementById('folderSelect').value],
+        date:dStr, time:tStr,
+        fav:false
+      });
+
+      const btn=document.getElementById('saveBtn');
+      if(btn){
+        btn.classList.add('saving');
+        setTimeout(()=>btn.classList.remove('saving'),180);
+        btn.classList.add('saved');
+        setTimeout(()=>btn.classList.remove('saved'),220);
+        sparkleAt(btn, 11);
+      }
+
+      document.getElementById('memoInput').value='';
+      clearAttachedImage(true);
+
+      selectedRange={start:dStr, end:dStr};
+      rangeMode='idle';
+      rangeAnchor=null;
+
+      toast('저장됐어요 ✴︎');
+      save();
+    }
+
+    /* 캘린더 렌더 */
+    function renderCalendar(){
+      const container=document.getElementById('calGridContainer');
+      container.innerHTML='';
+      const grid=document.createElement('div');
+      grid.className='cal-grid';
+
+      const year=currentViewDate.getFullYear();
+      const month=currentViewDate.getMonth();
+      document.getElementById('calMonth').innerText = `${year}년 ${month+1}월`;
+
+      ['일','월','화','수','목','금','토'].forEach((t,idx)=>{
+        const l=document.createElement('div');
+        l.className='cal-dow' + (idx===0?' sun':(idx===6?' sat':''));
+        l.innerText=t;
+        grid.appendChild(l);
+      });
+
+      const firstDay=new Date(year,month,1).getDay();
+      const lastDate=new Date(year,month+1,0).getDate();
+      for(let i=0;i<firstDay;i++) grid.appendChild(document.createElement('div'));
+
+      const activeRange = selectedRange ? normalizeRange(selectedRange.start, selectedRange.end) : null;
+
+      function getCellDateStrFromEl(el){
+        const ds = el?.dataset?.dateStr;
+        return ds || null;
+      }
+      function onDayTap(dateStr){
+        if(!selectedRange){
+          selectedRange={start:dateStr, end:dateStr};
+          rangeMode='awaitEnd';
+          rangeAnchor=dateStr;
+          toast('시작일 선택됨','다른 달로 이동해서 종료일을 선택해요');
+          render();
+          return;
+        }
+        if(rangeMode==='awaitEnd' && rangeAnchor){
+          selectedRange = normalizeRange(rangeAnchor, dateStr);
+          rangeMode='idle';
+          rangeAnchor=null;
+          toast('범위 선택 완료');
+          render();
+          return;
+        }
+        selectedRange={start:dateStr, end:dateStr};
+        rangeMode='awaitEnd';
+        rangeAnchor=dateStr;
+        toast('시작일 선택됨','종료일을 선택해요 (다른 달 가능)');
+        render();
+      }
+
+      for(let d=1; d<=lastDate; d++){
+        const fullDate = `${year}. ${month+1}. ${d}.`;
+        const dayDiv=document.createElement('div');
+        dayDiv.className='cal-day';
+        dayDiv.innerText=d;
+        dayDiv.dataset.dateStr=fullDate;
+
+        const dow=new Date(year,month,d).getDay();
+        if(dow===0) dayDiv.classList.add('sun');
+        if(dow===6) dayDiv.classList.add('sat');
+
+        if(memos.some(m=>m.date===fullDate)) dayDiv.classList.add('has-memo');
+
+        if(activeRange){
+          if(isInRange(fullDate, activeRange)) dayDiv.classList.add('in-range');
+          if(fullDate===activeRange.start) dayDiv.classList.add('range-start');
+          if(fullDate===activeRange.end) dayDiv.classList.add('range-end');
+        }
+
+        dayDiv.addEventListener('pointerdown',(e)=>{
+          e.preventDefault();
+          dayDiv.setPointerCapture(e.pointerId);
+          dragActive=true;
+
+          if(rangeMode!=='awaitEnd'){
+            selectedRange={start:fullDate, end:fullDate};
+            rangeMode='awaitEnd';
+            rangeAnchor=fullDate;
+            render();
+            toast('시작일 선택됨','드래그로 조절하거나, 다른 달로 이동해 종료일을 탭해요');
+            return;
+          }
+        });
+        dayDiv.addEventListener('pointermove',(e)=>{
+          if(!dragActive) return;
+          if(rangeMode!=='awaitEnd' || !rangeAnchor) return;
+          const el=document.elementFromPoint(e.clientX, e.clientY);
+          const dateStr=getCellDateStrFromEl(el?.closest?.('.cal-day'));
+          if(!dateStr) return;
+          selectedRange = normalizeRange(rangeAnchor, dateStr);
+          render();
+        });
+        dayDiv.addEventListener('pointerup',(e)=>{
+          e.preventDefault();
+          dragActive=false;
+        });
+        dayDiv.addEventListener('pointercancel',()=>{ dragActive=false; });
+        dayDiv.addEventListener('click',()=>{ if(dragActive) return; onDayTap(fullDate); });
+
+        grid.appendChild(dayDiv);
+      }
+
+      container.appendChild(grid);
+    }
+
+    function changeMonth(v){
+      currentViewDate.setMonth(currentViewDate.getMonth()+v);
+      renderCalendar();
+    }
+
+    function clearRangeSelection(){
+      selectedRange=null;
+      rangeMode='idle';
+      rangeAnchor=null;
+      toast('전체보기');
+      render();
+    }
+
+    function filterDate(d){
+      if(!d){ clearRangeSelection(); return; }
+      selectedRange={start:d, end:d};
+      rangeMode='idle';
+      rangeAnchor=null;
+      render();
+    }
+
+    function setFavFilter(v){
+      isFavFilter=v;
+      document.getElementById('tabAll').classList.toggle('active', !v);
+      document.getElementById('tabFav').classList.toggle('active', v);
+      render();
+    }
+
+    function renderRangeText(){
+      const wrap=document.getElementById('rangeTextWrap');
+      if(!wrap) return;
+
+      if(!selectedRange){
+        wrap.style.display='none';
+        wrap.innerHTML='';
+        return;
+      }
+      const r=normalizeRange(selectedRange.start, selectedRange.end);
+      if(!r){
+        wrap.style.display='none';
+        wrap.innerHTML='';
+        return;
+      }
+      wrap.style.display='block';
+      wrap.innerHTML = `
+        <div class="range-line">
+          ${rangeMode==='awaitEnd' ? '종료일 선택 중 · ' : ''}${fmtCompact(r.start)} ~ ${fmtCompact(r.end)}
+          <button class="range-chip-btn" onclick="clearRangeSelection()" title="범위 해제">✕</button>
+        </div>
+      `;
+    }
+
+    function render(){
+      document.getElementById('lockBtn').innerText = lockPw ? '🔒' : '🔓';
+      renderCalendar();
+      renderRangeText();
+      updateSearchClearBtn();
+
+      const keyword=(document.getElementById('searchInput').value||'').toLowerCase();
+      const rangeNorm = selectedRange ? normalizeRange(selectedRange.start, selectedRange.end) : null;
+      const dateFilteredMemos = rangeNorm ? memos.filter(m=>isInRange(m.date, rangeNorm)) : memos;
+
+      document.getElementById('allCount').innerText = dateFilteredMemos.length;
+      document.getElementById('favCount').innerText = dateFilteredMemos.filter(m=>m.fav).length;
+      document.getElementById('sparkDayCount').innerText = [...new Set(memos.map(m=>m.date))].length;
+
+      const fList=document.getElementById('folderList');
+      const fSelect=document.getElementById('folderSelect');
+
+      fList.innerHTML = `<div class="folder-chip" onclick="toggleSearch()">🔍</div>`;
+      fList.innerHTML += `<div class="folder-chip ${curFolder==='전체'?'active':''}" onclick="changeFolder('전체')">전체</div>`;
+      fSelect.innerHTML='';
+
+      folders.forEach(f=>{
+        fList.innerHTML += `<div class="folder-chip ${curFolder===f?'active':''}" onclick="changeFolder('${f}')">${f} <span class="btn-del-folder" onclick="deleteFolder('${f}', event)">×</span></div>`;
+        fSelect.innerHTML += `<option value="${f}" ${curFolder===f?'selected':''}>${f}</option>`;
+      });
+      fList.innerHTML += `<div class="folder-chip" onclick="addFolder()">+</div>`;
+
+      const container=document.getElementById('memoContainer');
+      container.innerHTML='';
+
+      let filtered = dateFilteredMemos.filter(m =>
+        (curFolder==='전체' || m.tags.includes(curFolder)) &&
+        (!isFavFilter || m.fav) &&
+        ((m.text||'').toLowerCase().includes(keyword))
+      ).reverse();
+
+      filtered.forEach((m)=>{
+        const isBlurred = !!lockPw && !unblurredIds.includes(m.id);
+
+        const item=document.createElement('div');
+        item.className='memo-item';
+        item.dataset.id=m.id;
+
+        item.innerHTML = `
+          ${isBlurred ? `<div class="lock-overlay" onclick="unlockTemporarily(${m.id})"><span>🔒 잠긴 영감 (탭하여 일시해제)</span></div>` : ''}
+          <div class="${isBlurred ? 'locked-content' : ''}">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <select class="memo-folder-select" onchange="updateMemoTag(${m.id}, this.value)">
+                ${folders.map(f => `<option value="${f}" ${m.tags[0]===f?'selected':''}>${f}</option>`).join('')}
+              </select>
+
+              <span class="star-btn"
+                    onpointerdown="event.stopPropagation()"
+                    onclick="toggleFav(${m.id}, this); event.stopPropagation();">
+                ${m.fav ? '⭐' : '☆'}
+              </span>
+            </div>
+
+            ${m.img ? `<img src="${m.img}" style="width:100%; border-radius:15px; margin-top:15px; border:1px solid var(--border);"
+                        onclick="openImageViewer('${m.img}')" />` : ''}
+
+            <div style="font-size:17px; line-height:1.8; margin-top:15px; font-weight:850;">
+              ${(m.text||'').replace(/\n/g,'<br>')}
+            </div>
+
+            <div style="margin-top:15px; display:flex; justify-content:space-between; font-size:12px; color:var(--sub-text); border-top:1px solid var(--border); padding-top:15px; font-weight:850;">
+              <span>${m.date} ${m.time}</span>
+              <span onclick="confirmDeleteMemo(${m.id})"
+                    style="color:#ff5f5f;cursor:pointer;font-weight:950;-webkit-tap-highlight-color: transparent;">
+                삭제
+              </span>
+            </div>
+          </div>
+        `;
+        container.appendChild(item);
+      });
+    }
+
+    /* 테마 토글: 유저가 바꿨으면 저장 */
+    async function toggleTheme(fromUser=false){
+      const isDark=document.body.classList.contains('dark-mode');
+      const nextDark=!isDark;
+
+      document.body.classList.toggle('dark-mode', nextDark);
+      document.getElementById('themeBtn').innerText = nextDark ? '☀️' : '🌙';
+      document.getElementById('mainLogo').src = nextDark ? 'logo_d.png' : 'logo_l.png';
+
+      if(fromUser) localStorage.setItem('inspy_theme', nextDark ? 'dark' : 'light');
+      toast(nextDark ? '다크 모드' : '라이트 모드');
+    }
+
+    // 초기화
+    applyInitialTheme();
+    loadPrimary();
+    render();
+    clearAttachedImage(true);
+
+// Expose functions referenced by inline handlers (onclick/oninput/onchange etc.)
+Object.assign(window as any, {
+  addFolder,
+  addMemo,
+  changeFolder,
+  changeMonth,
+  clearAttachedImage,
+  clearRangeSelection,
+  clearSearch,
+  closeImageViewer,
+  closeModal,
+  confirmDeleteMemo,
+  deleteFolder,
+  exportData,
+  filterDate,
+  handleLockToggle,
+  handleSearchInput,
+  importData,
+  modalOnBackdrop,
+  openImageViewer,
+  openPalette,
+  previewImage,
+  setFavFilter,
+  setPrimary,
+  toggleFav,
+  toggleSearch,
+  toggleTheme,
+  unlockTemporarily,
+  updateMemoTag
+});
+
+export {};
